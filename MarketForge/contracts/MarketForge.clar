@@ -204,4 +204,66 @@
   )
 )
 
+;; Advanced Market Making Function - Dynamic Liquidity Provision
+;; This function implements sophisticated market making strategies with real-time
+;; price adjustment, risk management, and automated liquidity provision
+(define-public (provide-market-liquidity 
+    (token-pair (string-ascii 20)) 
+    (base-quantity uint) 
+    (spread-percentage uint) 
+    (max-exposure uint))
+  (let (
+    (current-price-data (unwrap! (get-current-price token-pair) ERR-INVALID-PRICE))
+    (market-price (get price current-price-data))
+    (half-spread (/ (* market-price spread-percentage) u20000)) ;; Divide by 2 for each side
+    (buy-price (- market-price half-spread))
+    (sell-price (+ market-price half-spread))
+    (volatility-adjustment (/ (* market-price u10) u10000)) ;; 0.1% volatility buffer
+    (adjusted-buy-price (- buy-price volatility-adjustment))
+    (adjusted-sell-price (+ sell-price volatility-adjustment))
+    (quantity-per-level (/ base-quantity u5)) ;; Split across 5 price levels
+  )
+    ;; Security checks for market making parameters
+    (asserts! (var-get market-active) ERR-MARKET-CLOSED)
+    (asserts! (>= base-quantity MIN-ORDER-SIZE) ERR-INVALID-ORDER)
+    (asserts! (<= spread-percentage u1000) ERR-INVALID-PRICE) ;; Max 10% spread
+    (asserts! (> market-price u0) ERR-INVALID-PRICE)
+    
+    ;; Create multiple buy orders at different price levels
+    (unwrap! (place-order token-pair "buy" quantity-per-level adjusted-buy-price) ERR-INVALID-ORDER)
+    (unwrap! (place-order token-pair "buy" quantity-per-level (- adjusted-buy-price (/ adjusted-buy-price u100))) ERR-INVALID-ORDER)
+    (unwrap! (place-order token-pair "buy" quantity-per-level (- adjusted-buy-price (/ adjusted-buy-price u50))) ERR-INVALID-ORDER)
+    
+    ;; Create multiple sell orders at different price levels  
+    (unwrap! (place-order token-pair "sell" quantity-per-level adjusted-sell-price) ERR-INVALID-ORDER)
+    (unwrap! (place-order token-pair "sell" quantity-per-level (+ adjusted-sell-price (/ adjusted-sell-price u100))) ERR-INVALID-ORDER)
+    (unwrap! (place-order token-pair "sell" quantity-per-level (+ adjusted-sell-price (/ adjusted-sell-price u50))) ERR-INVALID-ORDER)
+    
+    ;; Update market depth with new liquidity
+    (update-market-depth token-pair adjusted-buy-price (* quantity-per-level u3) true)
+    (update-market-depth token-pair adjusted-sell-price (* quantity-per-level u3) false)
+    
+    ;; Calculate and validate total exposure
+    (let (
+      (total-exposure (* base-quantity market-price))
+      (exposure-check (< total-exposure max-exposure))
+    )
+      (asserts! exposure-check ERR-INSUFFICIENT-BALANCE)
+      
+      ;; Log market making activity by updating volume
+      (var-set total-volume (+ (var-get total-volume) base-quantity))
+      
+      ;; Return success with market making summary
+      (ok {
+        orders-created: u6,
+        total-liquidity: base-quantity,
+        buy-price-range: { min: (- adjusted-buy-price (/ adjusted-buy-price u50)), max: adjusted-buy-price },
+        sell-price-range: { min: adjusted-sell-price, max: (+ adjusted-sell-price (/ adjusted-sell-price u50)) },
+        effective-spread: spread-percentage,
+        market-price: market-price
+      })
+    )
+  )
+)
+
 
